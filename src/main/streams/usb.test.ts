@@ -209,4 +209,83 @@ describe('Rabby desktop native WebUSB permissions', () => {
       })
     ).toBe(false);
   });
+  describe('select-usb-device', () => {
+    const BACKGROUND = 'chrome-extension://rabby/background.html';
+    const ledger = { deviceId: 'ledger', vendorId: 0x2c97, productId: 0x4011 };
+    const other1209 = {
+      deviceId: 'other',
+      vendorId: 0x1209,
+      productId: 0x0001,
+    };
+    const onekey = { deviceId: 'onekey', vendorId: 0x1209, productId: 0x4f4c };
+    const classic = {
+      deviceId: 'classic',
+      vendorId: 0x1209,
+      productId: 0x53c1,
+    };
+
+    function select(details: any) {
+      const handler = mockMainSession.on.mock.calls.find(
+        ([event]) => event === 'select-usb-device'
+      )![1];
+      const event = { preventDefault: jest.fn() };
+      const callback = jest.fn();
+      handler(event, details, callback);
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(callback).toHaveBeenCalledTimes(1);
+      return callback.mock.calls[0];
+    }
+
+    it('picks the first OneKey device for the RabbyX background page', () => {
+      expect(
+        select({
+          frame: { url: BACKGROUND, top: null },
+          deviceList: [ledger, other1209, onekey, classic],
+        })
+      ).toEqual(['onekey']);
+    });
+
+    it('picks a OneKey device for the OneKey SDK iframe inside RabbyX', () => {
+      expect(
+        select({
+          frame: {
+            url: 'https://jssdk.onekey.so/1.2.7/iframe.html',
+            top: { url: BACKGROUND },
+          },
+          deviceList: [classic],
+        })
+      ).toEqual(['classic']);
+    });
+
+    it.each([
+      ['no OneKey device', { url: BACKGROUND, top: null }, [ledger, other1209]],
+      ['an empty list', { url: BACKGROUND, top: null }, []],
+      ['a missing frame', null, [onekey]],
+      [
+        'another extension',
+        { url: 'chrome-extension://other/background.html', top: null },
+        [onekey],
+      ],
+      [
+        'a RabbyX page other than background',
+        { url: 'chrome-extension://rabby/popup.html', top: null },
+        [onekey],
+      ],
+      [
+        'the OneKey iframe in a dapp',
+        {
+          url: 'https://jssdk.onekey.so/1.2.7/iframe.html',
+          top: { url: 'https://dapp.example/' },
+        },
+        [onekey],
+      ],
+      [
+        'a foreign iframe in RabbyX',
+        { url: 'https://evil.example/', top: { url: BACKGROUND } },
+        [onekey],
+      ],
+    ])('cancels the request for %s', (_name, frame, deviceList) => {
+      expect(select({ frame, deviceList })).toEqual([]);
+    });
+  });
 });

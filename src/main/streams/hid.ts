@@ -81,6 +81,41 @@ function originOfFrame(frame: { url?: string } | null | undefined) {
   return url ? `${url.protocol}//${url.host}` : null;
 }
 
+const ONEKEY_IFRAME_ORIGIN = 'https://jssdk.onekey.so';
+
+/**
+ * Picks the device for `navigator.usb.requestDevice()`. Without a
+ * `select-usb-device` handler Electron cancels every request. Only the RabbyX
+ * background page, or the OneKey SDK iframe inside it, may pick, and only a
+ * OneKey device. Returns undefined, which cancels the request, otherwise.
+ */
+export function pickOneKeyUsbDevice(
+  details: {
+    frame?: {
+      url?: string;
+      top?: { url?: string } | null;
+    } | null;
+    deviceList?: ReadonlyArray<{
+      deviceId: string;
+      vendorId?: number;
+      productId?: number;
+    }>;
+  },
+  rabbyOrigin: string | undefined
+) {
+  if (!rabbyOrigin) return undefined;
+  const { frame } = details;
+  const frameOrigin = originOfFrame(frame);
+  const topUrl = frame?.top ? frame.top.url : frame?.url;
+  if (
+    topUrl !== `${rabbyOrigin}/background.html` ||
+    (frameOrigin !== rabbyOrigin && frameOrigin !== ONEKEY_IFRAME_ORIGIN)
+  ) {
+    return undefined;
+  }
+  return (details.deviceList || []).find(isOneKeyUsbDevice)?.deviceId;
+}
+
 getSessionInsts().then((allSessions) => {
   const { mainSession } = allSessions;
   const grantedHidDevices = new Set<string>();
@@ -213,6 +248,25 @@ getSessionInsts().then((allSessions) => {
       });
     }
   );
+
+  mainSession.on('select-usb-device', (event, details, callback) => {
+    event.preventDefault();
+    let deviceId: string | undefined;
+    try {
+      deviceId = pickOneKeyUsbDevice(details, rabbyOrigin);
+    } catch (err) {
+      console.error('[error] select-usb-device::', err);
+    }
+    if (!IS_RUNTIME_PRODUCTION) {
+      console.debug(
+        `[debug] select-usb-device:: ${deviceId ? 'picked' : 'cancelled'}`,
+        details.deviceList?.length
+      );
+    }
+    // callback() with no id cancels requestDevice() with NotFoundError.
+    if (deviceId) callback(deviceId);
+    else callback();
+  });
 
   Object.keys(allSessions).forEach((_sessName) => {
     const sessName = _sessName as keyof typeof allSessions;
