@@ -55,24 +55,55 @@ handleIpcMainInvoke('confirm-selected-device', (_, payload) => {
 });
 
 const SELECT_DEVICE_TIMEOUT = 180 * 1e3;
+
+// OneKey WebUSB descriptors, mirrored from ONEKEY_WEBUSB_FILTER in
+// @onekeyfe/hd-shared 1.2.7. Only these devices are granted to RabbyX.
+const ONEKEY_USB_IDS: ReadonlyArray<{ vendorId: number; productId: number }> = [
+  { vendorId: 0x1209, productId: 0x53c0 }, // Classic / Classic 1s / Mini bootloader
+  { vendorId: 0x1209, productId: 0x53c1 }, // Classic / Classic 1s / Mini / Pro / Touch firmware
+  { vendorId: 0x1209, productId: 0x4f4a }, // Pro / Touch bootloader, Pro 2
+  { vendorId: 0x1209, productId: 0x4f4b }, // Pro / Touch firmware, Pro 2
+  { vendorId: 0x1209, productId: 0x4f4c }, // Pro 2 current firmware (Protocol V2)
+];
+
+export function isOneKeyUsbDevice(device: unknown) {
+  const { vendorId, productId } = (device || {}) as {
+    vendorId?: unknown;
+    productId?: unknown;
+  };
+  return ONEKEY_USB_IDS.some(
+    (id) => id.vendorId === vendorId && id.productId === productId
+  );
+}
+
+function originOfFrame(frame: { url?: string } | null | undefined) {
+  const url = frame?.url ? safeParseURL(frame.url) : null;
+  return url ? `${url.protocol}//${url.host}` : null;
+}
+
 getSessionInsts().then((allSessions) => {
   const { mainSession } = allSessions;
   const grantedHidDevices = new Set<string>();
   let rabbyOrigin: string | undefined;
 
+  // Register before the extension id is known so no USB/HID grant falls back
+  // to Electron's default while getRabbyExtId() is pending.
+  // A custom USB grant handler also owns HID grants in Electron.
+  mainSession.setDevicePermissionHandler(({ deviceType, origin, device }) => {
+    if (deviceType === 'usb') {
+      return (
+        !!rabbyOrigin && origin === rabbyOrigin && isOneKeyUsbDevice(device)
+      );
+    }
+    return (
+      deviceType === 'hid' &&
+      'deviceId' in device &&
+      grantedHidDevices.has(`${origin}:${device.deviceId}`)
+    );
+  });
+
   getRabbyExtId().then((id) => {
     rabbyOrigin = `chrome-extension://${id}`;
-    // A custom USB grant handler also owns HID grants in Electron.
-    mainSession.setDevicePermissionHandler(({ deviceType, origin, device }) => {
-      if (deviceType === 'usb') {
-        return origin === rabbyOrigin;
-      }
-      return (
-        deviceType === 'hid' &&
-        'deviceId' in device &&
-        grantedHidDevices.has(`${origin}:${device.deviceId}`)
-      );
-    });
   });
 
   mainSession.on('hid-device-revoked', (_, { device, origin }) => {
@@ -88,10 +119,16 @@ getSessionInsts().then((allSessions) => {
       // leave here for debug
       // console.debug('[debug] select-hid-device:: details', details);
 
+      const frameOrigin = originOfFrame(details.frame);
+      if (!frameOrigin) {
+        // The requesting frame is gone (or has no parseable URL): nothing to grant.
+        callback(null);
+        return;
+      }
+
       if (details.deviceList.length === 1) {
-        const url = new URL(details.frame.url);
         grantedHidDevices.add(
-          `${url.protocol}//${url.host}:${details.deviceList[0].deviceId}`
+          `${frameOrigin}:${details.deviceList[0].deviceId}`
         );
         callback(details.deviceList[0].deviceId);
         return;
@@ -134,10 +171,7 @@ getSessionInsts().then((allSessions) => {
                 );
                 callback(null);
               } else {
-                const url = new URL(details.frame.url);
-                grantedHidDevices.add(
-                  `${url.protocol}//${url.host}:${selectedId}`
-                );
+                grantedHidDevices.add(`${frameOrigin}:${selectedId}`);
                 callback(selectResult.deviceInfo.deviceId);
               }
 

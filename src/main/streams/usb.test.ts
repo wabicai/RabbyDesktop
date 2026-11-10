@@ -34,14 +34,39 @@ describe('Rabby desktop native WebUSB permissions', () => {
     return mockMainSession.setDevicePermissionHandler.mock.calls[0][0];
   }
 
-  it('grants USB discovery to the loaded RabbyX origin', () => {
+  const ONEKEY_PRO2 = { vendorId: 0x1209, productId: 0x4f4c };
+
+  it.each([
+    [0x1209, 0x53c0],
+    [0x1209, 0x53c1],
+    [0x1209, 0x4f4a],
+    [0x1209, 0x4f4b],
+    [0x1209, 0x4f4c],
+  ])(
+    'grants USB discovery of OneKey %i:%i to the loaded RabbyX origin',
+    (vendorId, productId) => {
+      expect(
+        devicePermission()({
+          deviceType: 'usb',
+          origin: 'chrome-extension://rabby',
+          device: { vendorId, productId },
+        })
+      ).toBe(true);
+    }
+  );
+
+  it.each([
+    ['no descriptor', {}],
+    ['Ledger', { vendorId: 0x2c97, productId: 0x4011 }],
+    ['other 0x1209 device', { vendorId: 0x1209, productId: 0x0001 }],
+  ])('denies USB discovery of %s even to RabbyX', (_name, device) => {
     expect(
       devicePermission()({
         deviceType: 'usb',
         origin: 'chrome-extension://rabby',
-        device: {},
+        device,
       })
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it.each([
@@ -49,9 +74,9 @@ describe('Rabby desktop native WebUSB permissions', () => {
     'https://jssdk.onekey.so',
     'chrome-extension://other',
   ])('denies USB discovery to %s', (origin) => {
-    expect(devicePermission()({ deviceType: 'usb', origin, device: {} })).toBe(
-      false
-    );
+    expect(
+      devicePermission()({ deviceType: 'usb', origin, device: ONEKEY_PRO2 })
+    ).toBe(false);
   });
 
   it('requires the RabbyX background page and main session for USB requests', () => {
@@ -157,5 +182,31 @@ describe('Rabby desktop native WebUSB permissions', () => {
     )![1];
     revoke({}, { origin: request.origin, device: request.device });
     expect(devicePermission()(request)).toBe(false);
+  });
+
+  it.each([
+    ['null frame', null],
+    ['frame without url', { url: '' }],
+    ['unparseable frame url', { url: 'not a url' }],
+  ])('rejects HID selection with a %s instead of throwing', (_name, frame) => {
+    const select = mockMainSession.on.mock.calls.find(
+      ([event]) => event === 'select-hid-device'
+    )![1];
+    const callback = jest.fn();
+    expect(() =>
+      select(
+        { preventDefault: jest.fn() },
+        { frame, deviceList: [{ deviceId: 'ledger-id' }] },
+        callback
+      )
+    ).not.toThrow();
+    expect(callback).toHaveBeenCalledWith(null);
+    expect(
+      devicePermission()({
+        deviceType: 'hid',
+        origin: 'chrome-extension://rabby',
+        device: { deviceId: 'ledger-id' },
+      })
+    ).toBe(false);
   });
 });
