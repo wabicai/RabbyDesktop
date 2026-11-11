@@ -35,6 +35,12 @@ describe('Rabby desktop native WebUSB permissions', () => {
   }
 
   const ONEKEY_PRO2 = { vendorId: 0x1209, productId: 0x4f4c };
+  const LEDGER = {
+    name: 'Ledger',
+    vendorId: 0x2c97,
+    productId: 0x4011,
+    serialNumber: 'ledger-serial',
+  };
 
   it.each([
     [0x1209, 0x53c0],
@@ -153,36 +159,147 @@ describe('Rabby desktop native WebUSB permissions', () => {
     expect(checkDapp(null, 'usb', 'chrome-extension://rabby/', {})).toBe(false);
   });
 
-  it('preserves selected HID grants and revokes them when the device is forgotten', () => {
-    const request = {
-      deviceType: 'hid',
-      origin: 'chrome-extension://rabby',
-      device: { deviceId: 'ledger-id' },
-    };
-    expect(devicePermission()(request)).toBe(false);
-    const select = mockMainSession.on.mock.calls.find(
-      ([event]) => event === 'select-hid-device'
-    )![1];
-    const callback = jest.fn();
-    select(
-      { preventDefault: jest.fn() },
-      {
-        frame: { url: 'chrome-extension://rabby/background.html' },
-        deviceList: [{ deviceId: 'ledger-id' }],
-      },
-      callback
-    );
-    expect(callback).toHaveBeenCalledWith('ledger-id');
-    expect(devicePermission()(request)).toBe(true);
-    expect(
-      devicePermission()({ ...request, origin: 'chrome-extension://other' })
-    ).toBe(false);
-    const revoke = mockMainSession.on.mock.calls.find(
-      ([event]) => event === 'hid-device-revoked'
-    )![1];
-    revoke({}, { origin: request.origin, device: request.device });
-    expect(devicePermission()(request)).toBe(false);
-  });
+  it.each([
+    { url: 'chrome-extension://rabby/background.html' },
+    {
+      url: 'https://iframe.example/ledger.html',
+      top: { url: 'chrome-extension://rabby/background.html' },
+    },
+  ])(
+    'preserves HID grants for the top-level origin and revokes them: %j',
+    (frame) => {
+      const request = {
+        deviceType: 'hid',
+        origin: 'chrome-extension://rabby',
+        device: LEDGER,
+      };
+      expect(devicePermission()(request)).toBe(false);
+      const select = mockMainSession.on.mock.calls.find(
+        ([event]) => event === 'select-hid-device'
+      )![1];
+      const callback = jest.fn();
+      select(
+        { preventDefault: jest.fn() },
+        {
+          frame,
+          deviceList: [{ ...LEDGER, deviceId: 'ledger-id' }],
+        },
+        callback
+      );
+      expect(callback).toHaveBeenCalledWith('ledger-id');
+      expect(devicePermission()(request)).toBe(true);
+      expect(
+        devicePermission()({ ...request, origin: 'chrome-extension://other' })
+      ).toBe(false);
+      expect(
+        devicePermission()({ ...request, origin: 'https://iframe.example' })
+      ).toBe(false);
+      [
+        { ...LEDGER, vendorId: 0x1209 },
+        { ...LEDGER, productId: 0x4012 },
+        { ...LEDGER, serialNumber: 'other-serial' },
+      ].forEach((device) => {
+        expect(devicePermission()({ ...request, device })).toBe(false);
+      });
+      const revoke = mockMainSession.on.mock.calls.find(
+        ([event]) => event === 'hid-device-revoked'
+      )![1];
+      revoke({}, { origin: request.origin, device: request.device });
+      expect(devicePermission()(request)).toBe(false);
+    }
+  );
+
+  it.each(['', undefined])(
+    'selects HID devices without a serial number (%s) without persisting a grant',
+    (serialNumber) => {
+      const device = { ...LEDGER, serialNumber };
+      const select = mockMainSession.on.mock.calls.find(
+        ([event]) => event === 'select-hid-device'
+      )![1];
+      const callback = jest.fn();
+      select(
+        { preventDefault: jest.fn() },
+        {
+          frame: { url: 'chrome-extension://rabby/background.html' },
+          deviceList: [{ ...device, deviceId: 'ledger-id' }],
+        },
+        callback
+      );
+      expect(callback).toHaveBeenCalledWith('ledger-id');
+      expect(
+        devicePermission()({
+          deviceType: 'hid',
+          origin: 'chrome-extension://rabby',
+          device,
+        })
+      ).toBe(false);
+    }
+  );
+
+  it.each(['ledger-serial', '', undefined])(
+    'uses the selected HID descriptor and top-level origin for UI grants (serial: %s)',
+    (serialNumber) => {
+      const helpers = jest.requireMock('../utils/stream-helpers');
+      helpers.getAllMainUIViews.mockResolvedValue({
+        views: { 'select-devices': { webContents: {} } },
+      });
+      const select = mockMainSession.on.mock.calls.find(
+        ([event]) => event === 'select-hid-device'
+      )![1];
+      const device = { ...LEDGER, serialNumber };
+      const callback = jest.fn();
+      select(
+        { preventDefault: jest.fn() },
+        {
+          frame: {
+            url: 'https://iframe.example/ledger.html',
+            top: { url: 'chrome-extension://rabby/background.html' },
+          },
+          deviceList: [
+            {
+              ...LEDGER,
+              deviceId: 'other-ledger',
+              serialNumber: 'other-serial',
+            },
+            { ...device, deviceId: 'ledger-id' },
+          ],
+        },
+        callback
+      );
+      const confirm = jest
+        .requireMock('../utils/ipcMainEvents')
+        .handleIpcMainInvoke.mock.calls.find(
+          ([event]: [string]) => event === 'confirm-selected-device'
+        )[1];
+      confirm(
+        {},
+        {
+          selectId: helpers.startSelectDevices.mock.calls[0][0],
+          device: {
+            deviceId: 'ledger-id',
+            vendorId: device.vendorId,
+            productId: device.productId,
+          },
+        }
+      );
+      expect(callback).toHaveBeenCalledWith('ledger-id');
+      const request = {
+        deviceType: 'hid',
+        origin: 'chrome-extension://rabby',
+        device,
+      };
+      expect(devicePermission()(request)).toBe(!!serialNumber);
+      expect(
+        devicePermission()({ ...request, origin: 'https://iframe.example' })
+      ).toBe(false);
+      expect(
+        devicePermission()({
+          ...request,
+          device: { ...LEDGER, serialNumber: 'other-serial' },
+        })
+      ).toBe(false);
+    }
+  );
 
   it.each([
     ['null frame', null],
@@ -196,7 +313,7 @@ describe('Rabby desktop native WebUSB permissions', () => {
     expect(() =>
       select(
         { preventDefault: jest.fn() },
-        { frame, deviceList: [{ deviceId: 'ledger-id' }] },
+        { frame, deviceList: [{ ...LEDGER, deviceId: 'ledger-id' }] },
         callback
       )
     ).not.toThrow();
@@ -205,7 +322,7 @@ describe('Rabby desktop native WebUSB permissions', () => {
       devicePermission()({
         deviceType: 'hid',
         origin: 'chrome-extension://rabby',
-        device: { deviceId: 'ledger-id' },
+        device: LEDGER,
       })
     ).toBe(false);
   });
@@ -256,6 +373,27 @@ describe('Rabby desktop native WebUSB permissions', () => {
         })
       ).toEqual(['classic']);
     });
+
+    it.each(['?debug=1', '#sdk', '?debug=1#sdk'])(
+      'picks a OneKey device when the background URL has %s',
+      (suffix) => {
+        expect(
+          select({
+            frame: { url: `${BACKGROUND}${suffix}`, top: null },
+            deviceList: [onekey],
+          })
+        ).toEqual(['onekey']);
+        expect(
+          select({
+            frame: {
+              url: 'https://jssdk.onekey.so/1.2.8/iframe.html',
+              top: { url: `${BACKGROUND}${suffix}` },
+            },
+            deviceList: [onekey],
+          })
+        ).toEqual(['onekey']);
+      }
+    );
 
     it.each([
       ['no OneKey device', { url: BACKGROUND, top: null }, [ledger, other1209]],

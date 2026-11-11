@@ -107,8 +107,11 @@ export function pickOneKeyUsbDevice(
   const { frame } = details;
   const frameOrigin = originOfFrame(frame);
   const topUrl = frame?.top ? frame.top.url : frame?.url;
+  const top = topUrl ? safeParseURL(topUrl) : null;
   if (
-    topUrl !== `${rabbyOrigin}/background.html` ||
+    !top ||
+    `${top.protocol}//${top.host}` !== rabbyOrigin ||
+    top.pathname !== '/background.html' ||
     (frameOrigin !== rabbyOrigin && frameOrigin !== ONEKEY_IFRAME_ORIGIN)
   ) {
     return undefined;
@@ -132,8 +135,10 @@ getSessionInsts().then((allSessions) => {
     }
     return (
       deviceType === 'hid' &&
-      'deviceId' in device &&
-      grantedHidDevices.has(`${origin}:${device.deviceId}`)
+      !!device.serialNumber &&
+      grantedHidDevices.has(
+        `${origin}:${device.vendorId}:${device.productId}:${device.serialNumber}`
+      )
     );
   });
 
@@ -142,8 +147,10 @@ getSessionInsts().then((allSessions) => {
   });
 
   mainSession.on('hid-device-revoked', (_, { device, origin }) => {
-    if (origin) {
-      grantedHidDevices.delete(`${origin}:${device.deviceId}`);
+    if (origin && device.serialNumber) {
+      grantedHidDevices.delete(
+        `${origin}:${device.vendorId}:${device.productId}:${device.serialNumber}`
+      );
     }
   });
 
@@ -154,18 +161,24 @@ getSessionInsts().then((allSessions) => {
       // leave here for debug
       // console.debug('[debug] select-hid-device:: details', details);
 
-      const frameOrigin = originOfFrame(details.frame);
+      const frameOrigin = originOfFrame({
+        url: details.frame?.top?.url ?? details.frame?.url,
+      });
       if (!frameOrigin) {
-        // The requesting frame is gone (or has no parseable URL): nothing to grant.
+        // The top-level frame is gone (or has no parseable URL): nothing to grant.
         callback(null);
         return;
       }
 
       if (details.deviceList.length === 1) {
-        grantedHidDevices.add(
-          `${frameOrigin}:${details.deviceList[0].deviceId}`
-        );
-        callback(details.deviceList[0].deviceId);
+        const device = details.deviceList[0];
+        // Chromium handles devices without a serial number ephemerally.
+        if (device.serialNumber) {
+          grantedHidDevices.add(
+            `${frameOrigin}:${device.vendorId}:${device.productId}:${device.serialNumber}`
+          );
+        }
+        callback(device.deviceId);
         return;
       }
 
@@ -199,14 +212,21 @@ getSessionInsts().then((allSessions) => {
               break;
             case 'selected': {
               const selectedId = selectResult.deviceInfo.deviceId;
+              const device = details.deviceList.find(
+                (d) => d.deviceId === selectedId
+              );
 
-              if (!details.deviceList.find((d) => d.deviceId === selectedId)) {
+              if (!device) {
                 console.error(
                   `[error] select-hid-device:: device ${selectedId} not found`
                 );
                 callback(null);
               } else {
-                grantedHidDevices.add(`${frameOrigin}:${selectedId}`);
+                if (device.serialNumber) {
+                  grantedHidDevices.add(
+                    `${frameOrigin}:${device.vendorId}:${device.productId}:${device.serialNumber}`
+                  );
+                }
                 callback(selectResult.deviceInfo.deviceId);
               }
 
