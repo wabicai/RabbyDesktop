@@ -57,7 +57,7 @@ handleIpcMainInvoke('confirm-selected-device', (_, payload) => {
 const SELECT_DEVICE_TIMEOUT = 180 * 1e3;
 
 // OneKey WebUSB descriptors, mirrored from ONEKEY_WEBUSB_FILTER in
-// @onekeyfe/hd-shared 1.2.7. Only these devices are granted to RabbyX.
+// @onekeyfe/hd-shared 1.2.8 (unchanged since 1.2.7). Only these devices are granted to RabbyX.
 const ONEKEY_USB_IDS: ReadonlyArray<{ vendorId: number; productId: number }> = [
   { vendorId: 0x1209, productId: 0x53c0 }, // Classic / Classic 1s / Mini bootloader
   { vendorId: 0x1209, productId: 0x53c1 }, // Classic / Classic 1s / Mini / Pro / Touch firmware

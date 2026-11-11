@@ -249,7 +249,7 @@ describe('Rabby desktop native WebUSB permissions', () => {
       expect(
         select({
           frame: {
-            url: 'https://jssdk.onekey.so/1.2.7/iframe.html',
+            url: 'https://jssdk.onekey.so/1.2.8/iframe.html',
             top: { url: BACKGROUND },
           },
           deviceList: [classic],
@@ -274,7 +274,7 @@ describe('Rabby desktop native WebUSB permissions', () => {
       [
         'the OneKey iframe in a dapp',
         {
-          url: 'https://jssdk.onekey.so/1.2.7/iframe.html',
+          url: 'https://jssdk.onekey.so/1.2.8/iframe.html',
           top: { url: 'https://dapp.example/' },
         },
         [onekey],
